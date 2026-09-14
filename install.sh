@@ -353,8 +353,8 @@ systemctl stop nodes-sub.service 2>/dev/null || true
 fuser -k 27695/tcp 2>/dev/null || true
 SUB_DIR="/var/www/nodes_sub"
 mkdir -p "$SUB_DIR"
-SUB_FILE="$SUB_DIR/sub.txt"
-find "$SUB_DIR" -maxdepth 1 -type f -name 'sub-*.txt' -delete
+SUB_FILE="$SUB_DIR/one"
+find "$SUB_DIR" -maxdepth 1 -type f \( -name 'sub-*.txt' -o -name 'sub.txt' -o -name 'one' \) -delete
 rm -f "$SUB_FILE"
 
 HY2_URL="hysteria2://${HY2_PASS}@${SERVER_IP}:24443/?sni=www.bing.com&insecure=1#Oracle-Hy2-Speed"
@@ -412,7 +412,7 @@ systemctl restart nodes-sub.service
 systemctl is-active --quiet nodes-sub.service
 SUB_HTTP_STATUS="000"
 for _ in {1..10}; do
-  SUB_HTTP_STATUS=$(curl -sS --connect-timeout 1 --max-time 3 -o /tmp/nodes-sub-check -w '%{http_code}' "http://127.0.0.1:27695/sub.txt" 2>/dev/null || true)
+  SUB_HTTP_STATUS=$(curl -sS --connect-timeout 1 --max-time 3 -o /tmp/nodes-sub-check -w '%{http_code}' "http://127.0.0.1:27695/one" 2>/dev/null || true)
   if [[ "$SUB_HTTP_STATUS" == "200" && -s /tmp/nodes-sub-check ]]; then
     break
   fi
@@ -432,7 +432,7 @@ echo -e "\n================================================================="
 echo -e "${GREEN}恭喜！双节点与分流系统安装完成！${PLAIN}"
 echo -e "================================================================="
 echo -e "订阅地址 (直接复制到 v2rayN 订阅分组一键拉取):"
-echo -e "${YELLOW}http://${SERVER_IP}:27695/sub.txt${PLAIN}"
+echo -e "${YELLOW}http://${SERVER_IP}:27695/one${PLAIN}"
 echo -e "\n--- 节点明细 ---"
 echo -e "1. Hysteria 2:"
 echo -e "$HY2_URL"
