@@ -256,7 +256,7 @@ systemctl enable xray
 systemctl is-active --quiet xray
 
 echo -e "${GREEN}>>> 5. 安装配置 Hysteria 2 极速节点...${PLAIN}"
-bash <(curl -fsSL https://get.hy2.sh/) --no-prompt
+bash <(curl -fsSL https://get.hy2.sh/)
 
 if [[ ! -x /usr/local/bin/hysteria ]]; then
   echo -e "${RED}[错误] Hysteria 2 安装失败，未找到 /usr/local/bin/hysteria。${PLAIN}"
