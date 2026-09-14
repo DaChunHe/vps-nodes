@@ -70,7 +70,7 @@ fi
 echo -e "${GREEN}>>> 2. 安装必要的基础工具链...${PLAIN}"
 export DEBIAN_FRONTEND=noninteractive
 apt update -y
-apt install -y curl wget socat openssl jq libcap2-bin ca-certificates gnupg python3 procps iproute2
+apt install -y curl wget socat openssl jq libcap2-bin ca-certificates gnupg python3 procps iproute2 unzip
 
 echo -e "${GREEN}>>> 3. 安装配置 WARP SOCKS5 本地出口 (127.0.0.1:40000)...${PLAIN}"
 if ! ss -tulpn | grep -q "40000"; then
@@ -96,7 +96,9 @@ if ! ss -tulpn | grep -q "40000"; then
     else
         # ARM64 原生轻量代理部署
         mkdir -p /opt/warp
-        curl -fL --retry 3 -o /opt/warp/warp-go https://github.com/bepass-org/warp-plus/releases/latest/download/warp-plus_linux-arm64
+        curl -fL --retry 3 -o /opt/warp/warp-plus.zip https://github.com/bepass-org/warp-plus/releases/latest/download/warp-plus_linux-arm64.zip
+        unzip -p /opt/warp/warp-plus.zip warp-plus > /opt/warp/warp-go
+        rm -f /opt/warp/warp-plus.zip
         chmod 700 /opt/warp/warp-go
         if [[ -x /opt/warp/warp-go ]]; then
             cat << 'EOF_WARP' > /etc/systemd/system/warp-socks.service
@@ -105,7 +107,7 @@ Description=WARP SOCKS5 Local Client
 After=network.target
 
 [Service]
-ExecStart=/opt/warp/warp-go --bind 127.0.0.1:40000
+ExecStart=/opt/warp/warp-go -b 127.0.0.1:40000
 Restart=always
 RestartSec=3
 
