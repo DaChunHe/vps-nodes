@@ -7,7 +7,7 @@ Ubuntu/Debian VPS 双节点安装脚本，部署 Hysteria 2、Xray VLESS-REALITY
 将仓库提交并推送到 GitHub 后，在目标 VPS 上以 root 执行：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DaChunHe/vps-nodes/main/install.sh -o /tmp/vps-nodes-install.sh
+curl -fsSL https://github.com/DaChunHe/vps-nodes/raw/refs/heads/main/install.sh -o /tmp/vps-nodes-install.sh
 chmod 700 /tmp/vps-nodes-install.sh
 /tmp/vps-nodes-install.sh
 ```
