@@ -377,7 +377,15 @@ systemctl daemon-reload
 systemctl enable nodes-sub.service
 systemctl restart nodes-sub.service
 systemctl is-active --quiet nodes-sub.service
-if [[ ! -f "$SUB_FILE" ]] || [[ "$(curl -sS -o /tmp/nodes-sub-check -w '%{http_code}' "http://127.0.0.1:27695/sub-${SUB_TOKEN}.txt")" != "200" ]] || [[ ! -s /tmp/nodes-sub-check ]]; then
+SUB_HTTP_STATUS="000"
+for _ in {1..10}; do
+  SUB_HTTP_STATUS=$(curl -sS --connect-timeout 1 --max-time 3 -o /tmp/nodes-sub-check -w '%{http_code}' "http://127.0.0.1:27695/sub-${SUB_TOKEN}.txt" 2>/dev/null || true)
+  if [[ "$SUB_HTTP_STATUS" == "200" && -s /tmp/nodes-sub-check ]]; then
+    break
+  fi
+  sleep 1
+done
+if [[ ! -f "$SUB_FILE" || "$SUB_HTTP_STATUS" != "200" || ! -s /tmp/nodes-sub-check ]]; then
   echo -e "${RED}[错误] 订阅服务未能返回本次生成的订阅文件，当前目录内容：${PLAIN}"
   find "$SUB_DIR" -maxdepth 1 -type f -printf '%f\n' >&2
   systemctl status nodes-sub.service --no-pager >&2 || true
