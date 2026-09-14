@@ -332,6 +332,7 @@ fi
 cat << 'EOF_SUB_SERVER' > /usr/local/sbin/nodes-sub-server.py
 #!/usr/bin/env python3
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+from functools import partial
 
 
 class SubscriptionHandler(SimpleHTTPRequestHandler):
@@ -342,7 +343,8 @@ class SubscriptionHandler(SimpleHTTPRequestHandler):
     super().end_headers()
 
 
-ThreadingHTTPServer(("0.0.0.0", 27695), SubscriptionHandler).serve_forever()
+subscription_handler = partial(SubscriptionHandler, directory="/var/www/nodes_sub")
+ThreadingHTTPServer(("0.0.0.0", 27695), subscription_handler).serve_forever()
 EOF_SUB_SERVER
 chmod 700 /usr/local/sbin/nodes-sub-server.py
 
@@ -363,10 +365,13 @@ WantedBy=multi-user.target
 EOF
 
 systemctl daemon-reload
-systemctl enable --now nodes-sub.service
+systemctl enable nodes-sub.service
+systemctl restart nodes-sub.service
 systemctl is-active --quiet nodes-sub.service
-if [[ "$(curl -fsS -o /tmp/nodes-sub-check -w '%{http_code}' "http://127.0.0.1:27695/sub-${SUB_TOKEN}.txt")" != "200" ]] || [[ ! -s /tmp/nodes-sub-check ]]; then
-  echo -e "${RED}[错误] 订阅服务未能返回本次生成的订阅文件。${PLAIN}"
+if [[ ! -f "$SUB_FILE" ]] || [[ "$(curl -sS -o /tmp/nodes-sub-check -w '%{http_code}' "http://127.0.0.1:27695/sub-${SUB_TOKEN}.txt")" != "200" ]] || [[ ! -s /tmp/nodes-sub-check ]]; then
+  echo -e "${RED}[错误] 订阅服务未能返回本次生成的订阅文件，当前目录内容：${PLAIN}"
+  find "$SUB_DIR" -maxdepth 1 -type f -printf '%f\n' >&2
+  systemctl status nodes-sub.service --no-pager >&2 || true
   exit 1
 fi
 rm -f /tmp/nodes-sub-check
