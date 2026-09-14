@@ -1,0 +1,327 @@
+#!/usr/bin/env bash
+# ==============================================================================
+# VPS Dual-Node Setup: Hysteria 2 + Xray VLESS-REALITY + WARP SOCKS5 Route
+# Supported Platforms: Ubuntu / Debian (x86_64, ARM64)
+# ==============================================================================
+
+set -Eeuo pipefail
+umask 077
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+PLAIN='\033[0m'
+
+if [[ $EUID -ne 0 ]]; then
+    echo -e "${RED}[错误] 请使用 root 权限运行此脚本！${PLAIN}"
+    exit 1
+fi
+
+# 检查运行环境
+if [[ ! -r /etc/os-release ]] || ! . /etc/os-release || [[ "${ID:-}" != "ubuntu" && "${ID:-}" != "debian" ]]; then
+  echo -e "${RED}[错误] 仅支持 Ubuntu 或 Debian！${PLAIN}"
+  exit 1
+fi
+
+for command_name in apt curl openssl systemctl; do
+  if ! command -v "$command_name" >/dev/null 2>&1; then
+    echo -e "${RED}[错误] 缺少必要命令: ${command_name}${PLAIN}"
+    exit 1
+  fi
+done
+
+# 获取并校验公网 IPv4，首个接口返回异常内容时继续尝试备用接口。
+get_public_ipv4() {
+  local candidate endpoint
+  for endpoint in https://api.ipify.org https://ifconfig.me https://icanhazip.com; do
+    candidate=$(curl -4fsS --max-time 5 "$endpoint" 2>/dev/null || true)
+    if [[ "$candidate" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+if ! SERVER_IP=$(get_public_ipv4); then
+    echo -e "${RED}[错误] 无法获取公网 IPv4 地址，请检查机器外网连接！${PLAIN}"
+    exit 1
+fi
+
+ARCH=$(uname -m)
+case "$ARCH" in
+  x86_64|amd64) ARCH="amd64" ;;
+  aarch64|arm64) ARCH="arm64" ;;
+  *) echo -e "${RED}[错误] 不支持的架构: $ARCH${PLAIN}"; exit 1 ;;
+esac
+
+echo -e "${GREEN}>>> 1. 配置常用端口（不清空现有防火墙规则）...${PLAIN}"
+
+if command -v ufw &>/dev/null; then
+    ufw allow 443/tcp 2>/dev/null || true
+    ufw allow 24443/udp 2>/dev/null || true
+    ufw allow 27695/tcp 2>/dev/null || true
+fi
+
+if command -v netfilter-persistent &>/dev/null; then
+    netfilter-persistent save 2>/dev/null || true
+fi
+
+echo -e "${GREEN}>>> 2. 安装必要的基础工具链...${PLAIN}"
+export DEBIAN_FRONTEND=noninteractive
+apt update -y
+apt install -y curl wget socat openssl jq libcap2-bin ca-certificates gnupg python3 procps iproute2
+
+echo -e "${GREEN}>>> 3. 安装配置 WARP SOCKS5 本地出口 (127.0.0.1:40000)...${PLAIN}"
+if ! ss -tulpn | grep -q "40000"; then
+    if [[ "$ARCH" == "amd64" ]]; then
+        # x86_64 官方稳定方案
+        curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | gpg --yes --dearmor --output /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
+        CODENAME="${VERSION_CODENAME:-}"
+        if [[ -z "$CODENAME" ]]; then
+          echo -e "${RED}[错误] 无法确定系统发行版代号，不能配置 Cloudflare WARP 软件源。${PLAIN}"
+          exit 1
+        fi
+        echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ ${CODENAME} main" | tee /etc/apt/sources.list.d/cloudflare-client.list
+        apt update -y
+        apt install -y cloudflare-warp
+        systemctl enable --now warp-svc
+        sleep 2
+        if ! warp-cli --accept-tos registration show >/dev/null 2>&1; then
+          warp-cli --accept-tos registration new
+        fi
+        warp-cli --accept-tos mode proxy
+        warp-cli --accept-tos proxy port 40000
+        warp-cli --accept-tos connect
+    else
+        # ARM64 原生轻量代理部署
+        mkdir -p /opt/warp
+        curl -fL --retry 3 -o /opt/warp/warp-go https://github.com/bepass-org/warp-plus/releases/latest/download/warp-plus_linux-arm64
+        chmod 700 /opt/warp/warp-go
+        if [[ -x /opt/warp/warp-go ]]; then
+            cat << 'EOF_WARP' > /etc/systemd/system/warp-socks.service
+[Unit]
+Description=WARP SOCKS5 Local Client
+After=network.target
+
+[Service]
+ExecStart=/opt/warp/warp-go --bind 127.0.0.1:40000
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+EOF_WARP
+            systemctl daemon-reload
+            systemctl enable --now warp-socks.service
+        fi
+    fi
+fi
+
+for _ in {1..10}; do
+  if ss -ltnH 'sport = :40000' | grep -q .; then
+    break
+  fi
+  sleep 1
+done
+if ! ss -ltnH 'sport = :40000' | grep -q .; then
+  echo -e "${RED}[错误] WARP SOCKS5 未监听 127.0.0.1:40000。${PLAIN}"
+  exit 1
+fi
+
+echo -e "${GREEN}>>> 4. 安装官方 Xray-core 并部署 REALITY 节点...${PLAIN}"
+bash -c "$(curl -fsSL https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install
+
+# 直接调用刚安装的 xray 原生二进制，彻底杜绝手工计算密钥错误
+KEY_PAIR=$(/usr/local/bin/xray x25519)
+PRIV_KEY=$(echo "$KEY_PAIR" | grep -Ei 'Private key|Password' | awk '{print $NF}')
+PUB_KEY=$(echo "$KEY_PAIR" | grep -Ei 'Public key' | awk '{print $NF}')
+UUID=$(/usr/local/bin/xray uuid)
+SHORT_ID=$(openssl rand -hex 4)
+SNI="www.microsoft.com"
+if [[ -z "$PRIV_KEY" || -z "$PUB_KEY" || -z "$UUID" || -z "$SHORT_ID" ]]; then
+  echo -e "${RED}[错误] Xray 密钥或 UUID 生成失败。${PLAIN}"
+  exit 1
+fi
+
+# 写入服务端完整配置（含 WARP 出站路由）
+cat << EOF > /usr/local/etc/xray/config.json
+{
+  "log": {
+    "loglevel": "warning"
+  },
+  "inbounds": [
+    {
+      "port": 443,
+      "protocol": "vless",
+      "settings": {
+        "clients": [
+          {
+            "id": "${UUID}",
+            "flow": "xtls-rprx-vision"
+          }
+        ],
+        "decryption": "none"
+      },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "reality",
+        "realitySettings": {
+          "show": false,
+          "dest": "${SNI}:443",
+          "xver": 0,
+          "serverNames": [
+            "${SNI}"
+          ],
+          "privateKey": "${PRIV_KEY}",
+          "shortIds": [
+            "",
+            "${SHORT_ID}"
+          ]
+        }
+      }
+    }
+  ],
+  "outbounds": [
+    {
+      "protocol": "freedom",
+      "tag": "direct"
+    },
+    {
+      "protocol": "socks",
+      "settings": {
+        "servers": [
+          {
+            "address": "127.0.0.1",
+            "port": 40000
+          }
+        ]
+      },
+      "tag": "warp-out"
+    }
+  ],
+  "routing": {
+    "domainStrategy": "IPIfNonMatch",
+    "rules": [
+      {
+        "type": "field",
+        "outboundTag": "warp-out",
+        "domain": [
+          "domain:google.com",
+          "domain:googleapis.com",
+          "domain:gstatic.com",
+          "domain:googleusercontent.com",
+          "domain:googletagmanager.com",
+          "domain:gemini.google.com",
+          "domain:aistudio.google.com",
+          "domain:generativelanguage.googleapis.com",
+          "domain:openai.com",
+          "domain:chatgpt.com",
+          "domain:oaistatic.com",
+          "domain:oaiusercontent.com",
+          "domain:anthropic.com",
+          "domain:claude.ai"
+        ]
+      },
+      {
+        "type": "field",
+        "outboundTag": "direct",
+        "network": "tcp,udp"
+      }
+    ]
+  }
+}
+EOF
+
+chmod 600 /usr/local/etc/xray/config.json
+/usr/local/bin/xray run -test -config /usr/local/etc/xray/config.json
+systemctl restart xray
+systemctl enable xray
+systemctl is-active --quiet xray
+
+echo -e "${GREEN}>>> 5. 安装配置 Hysteria 2 极速节点...${PLAIN}"
+bash <(curl -fsSL https://get.hy2.sh/) --version latest --no-prompt
+
+mkdir -p /etc/hysteria /etc/hysteria/cert
+openssl req -x509 -nodes -newkey ec:<(openssl ecparam -name prime256v1) \
+  -keyout /etc/hysteria/cert/server.key \
+  -out /etc/hysteria/cert/server.crt \
+  -subj "/CN=bing.com" -days 36500 2>/dev/null
+
+HY2_PASS=$(openssl rand -hex 12)
+if [[ ${#HY2_PASS} -lt 16 ]]; then
+  echo -e "${RED}[错误] Hysteria 密码生成失败。${PLAIN}"
+  exit 1
+fi
+
+cat << EOF > /etc/hysteria/config.yaml
+listen: :24443
+tls:
+  cert: /etc/hysteria/cert/server.crt
+  key: /etc/hysteria/cert/server.key
+auth:
+  type: password
+  password: ${HY2_PASS}
+masquerade:
+  type: proxy
+  proxy:
+    url: https://bing.com
+    rewriteHost: true
+ignoreClientBandwidth: false
+EOF
+
+chmod 600 /etc/hysteria/config.yaml /etc/hysteria/cert/server.key
+systemctl restart hysteria-server
+systemctl enable hysteria-server
+systemctl is-active --quiet hysteria-server
+
+echo -e "${GREEN}>>> 6. 更新并部署订阅服务 (端口 27695)...${PLAIN}"
+systemctl stop nodes-sub.service 2>/dev/null || true
+SUB_DIR="/var/www/nodes_sub"
+mkdir -p "$SUB_DIR"
+SUB_TOKEN=$(openssl rand -hex 16)
+SUB_FILE="$SUB_DIR/sub-${SUB_TOKEN}.txt"
+
+HY2_URL="hysteria2://${HY2_PASS}@${SERVER_IP}:24443/?insecure=1&sni=bing.com#Oracle-Main-Hy2-Speed"
+REALITY_URL="vless://${UUID}@${SERVER_IP}:443?security=reality&encryption=none&pbk=${PUB_KEY}&headerType=none&fp=chrome&type=tcp&flow=xtls-rprx-vision&sni=${SNI}&sid=${SHORT_ID}#Oracle-AI-SmartRoute-Reality"
+
+rm -f "$SUB_DIR/sub.txt"
+printf "%s\n%s\n" "$HY2_URL" "$REALITY_URL" > "$SUB_FILE"
+chmod 600 "$SUB_FILE"
+
+cat << EOF > /etc/systemd/system/nodes-sub.service
+[Unit]
+Description=Lightweight Subscription Server
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=${SUB_DIR}
+ExecStart=/usr/bin/python3 -m http.server 27695 --bind 0.0.0.0
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload
+systemctl enable --now nodes-sub.service
+systemctl is-active --quiet nodes-sub.service
+
+echo -e "\n================================================================="
+echo -e "${GREEN}恭喜！双节点与分流系统安装完成！${PLAIN}"
+echo -e "================================================================="
+echo -e "订阅地址 (直接复制到 v2rayN 订阅分组一键拉取):"
+echo -e "${YELLOW}http://${SERVER_IP}:27695/sub-${SUB_TOKEN}.txt${PLAIN}"
+echo -e "\n--- 节点明细 ---"
+echo -e "1. Hysteria 2:"
+echo -e "$HY2_URL"
+echo -e "\n2. VLESS-REALITY (AI 分流):"
+echo -e "$REALITY_URL"
+echo -e "================================================================="
+echo -e "${RED}[甲骨文安全列表提醒]${PLAIN} 务必放行入站规则："
+echo -e "  - TCP: 443"
+echo -e "  - UDP: 24443"
+echo -e "  - TCP: 27695"
+echo -e "================================================================="
