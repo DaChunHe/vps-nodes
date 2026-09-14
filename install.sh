@@ -254,6 +254,10 @@ chmod 600 /usr/local/etc/xray/config.json
 systemctl restart xray
 systemctl enable xray
 systemctl is-active --quiet xray
+if ! ss -ltnH 'sport = :443' | grep -q .; then
+  echo -e "${RED}[错误] Xray 未监听 TCP 443，请执行 journalctl -u xray -n 50 查看日志。${PLAIN}"
+  exit 1
+fi
 
 echo -e "${GREEN}>>> 5. 安装配置 Hysteria 2 极速节点...${PLAIN}"
 bash <(curl -fsSL https://get.hy2.sh/)
@@ -295,6 +299,10 @@ chmod 600 /etc/hysteria/config.yaml /etc/hysteria/cert/server.key
 systemctl restart hysteria-server
 systemctl enable hysteria-server
 systemctl is-active --quiet hysteria-server
+if ! ss -lunH 'sport = :24443' | grep -q .; then
+  echo -e "${RED}[错误] Hysteria 未监听 UDP 24443，请执行 journalctl -u hysteria-server -n 50 查看日志。${PLAIN}"
+  exit 1
+fi
 
 echo -e "${GREEN}>>> 6. 更新并部署订阅服务 (端口 27695)...${PLAIN}"
 systemctl stop nodes-sub.service 2>/dev/null || true
@@ -303,12 +311,17 @@ mkdir -p "$SUB_DIR"
 SUB_TOKEN=$(openssl rand -hex 16)
 SUB_FILE="$SUB_DIR/sub-${SUB_TOKEN}.txt"
 
-HY2_URL="hysteria2://${HY2_PASS}@${SERVER_IP}:24443/?insecure=1&sni=bing.com#Oracle-Main-Hy2-Speed"
+HY2_URL="hysteria2://${HY2_PASS}@${SERVER_IP}:24443/?sni=bing.com&insecure=1#Oracle-Main-Hy2-Speed"
 REALITY_URL="vless://${UUID}@${SERVER_IP}:443?security=reality&encryption=none&pbk=${PUB_KEY}&headerType=none&fp=chrome&type=tcp&flow=xtls-rprx-vision&sni=${SNI}&sid=${SHORT_ID}#Oracle-AI-SmartRoute-Reality"
 
 rm -f "$SUB_DIR/sub.txt"
-printf "%s\n%s\n" "$HY2_URL" "$REALITY_URL" | base64 -w 0 > "$SUB_FILE"
+SUB_CONTENT=$(printf "%s\n%s\n" "$HY2_URL" "$REALITY_URL")
+printf '%s' "$SUB_CONTENT" | base64 -w 0 > "$SUB_FILE"
 chmod 600 "$SUB_FILE"
+if [[ "$(base64 -d "$SUB_FILE")" != "$SUB_CONTENT" ]]; then
+  echo -e "${RED}[错误] 订阅文件校验失败。${PLAIN}"
+  exit 1
+fi
 
 cat << EOF > /etc/systemd/system/nodes-sub.service
 [Unit]
