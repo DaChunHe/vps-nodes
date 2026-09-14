@@ -130,7 +130,17 @@ if ! ss -ltnH 'sport = :40000' | grep -q .; then
 fi
 
 echo -e "${GREEN}>>> 4. 安装官方 Xray-core 并部署 REALITY 节点...${PLAIN}"
-bash -c "$(curl -fsSL https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install
+if [[ -x /usr/local/bin/xray ]]; then
+  XRAY_VERSION=$(/usr/local/bin/xray version | awk 'NR == 1 { first = $0 } END { print first }')
+  echo -e "${YELLOW}检测到已有 Xray-core，跳过重复安装：${XRAY_VERSION}${PLAIN}"
+else
+  bash -c "$(curl -fsSL https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install
+fi
+
+if [[ ! -x /usr/local/bin/xray ]]; then
+  echo -e "${RED}[错误] Xray-core 安装失败，未找到 /usr/local/bin/xray。${PLAIN}"
+  exit 1
+fi
 
 # 直接调用刚安装的 xray 原生二进制，彻底杜绝手工计算密钥错误
 KEY_PAIR=$(/usr/local/bin/xray x25519)
