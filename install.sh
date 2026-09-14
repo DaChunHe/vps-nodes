@@ -167,7 +167,8 @@ if ! UUID=$(/usr/local/bin/xray uuid 2>&1); then
   exit 1
 fi
 SHORT_ID=$(openssl rand -hex 4)
-SNI="www.microsoft.com"
+SNI="learn.microsoft.com"
+REALITY_SERVER_NAMES='["learn.microsoft.com"]'
 if [[ -z "$PRIV_KEY" || -z "$PUB_KEY" || -z "$UUID" || -z "$SHORT_ID" ]]; then
   echo -e "${RED}[错误] 无法解析 Xray 密钥输出，请检查当前 Xray-core 版本的 x25519 输出格式。${PLAIN}"
   exit 1
@@ -187,6 +188,7 @@ cat << EOF > /usr/local/etc/xray/config.json
   },
   "inbounds": [
     {
+      "listen": "0.0.0.0",
       "port": 443,
       "protocol": "vless",
       "settings": {
@@ -205,12 +207,9 @@ cat << EOF > /usr/local/etc/xray/config.json
           "show": false,
           "dest": "${SNI}:443",
           "xver": 0,
-          "serverNames": [
-            "${SNI}"
-          ],
+          "serverNames": ${REALITY_SERVER_NAMES},
           "privateKey": "${PRIV_KEY}",
           "shortIds": [
-            "",
             "${SHORT_ID}"
           ]
         }
@@ -242,11 +241,6 @@ cat << EOF > /usr/local/etc/xray/config.json
         "type": "field",
         "outboundTag": "${AI_OUTBOUND_TAG}",
         "domain": [
-          "domain:google.com",
-          "domain:googleapis.com",
-          "domain:gstatic.com",
-          "domain:googleusercontent.com",
-          "domain:googletagmanager.com",
           "domain:gemini.google.com",
           "domain:aistudio.google.com",
           "domain:generativelanguage.googleapis.com",
@@ -254,8 +248,8 @@ cat << EOF > /usr/local/etc/xray/config.json
           "domain:chatgpt.com",
           "domain:oaistatic.com",
           "domain:oaiusercontent.com",
-          "domain:anthropic.com",
-          "domain:claude.ai"
+          "domain:claude.ai",
+          "domain:anthropic.com"
         ]
       },
       {
@@ -269,7 +263,11 @@ cat << EOF > /usr/local/etc/xray/config.json
 EOF
 
 chmod 600 /usr/local/etc/xray/config.json
-/usr/local/bin/xray run -test -config /usr/local/etc/xray/config.json
+if ! /usr/local/bin/xray run -test -config /usr/local/etc/xray/config.json >/tmp/xray-preflight.log 2>&1; then
+  echo -e "${RED}[错误] Xray 配置校验失败，详情：${PLAIN}"
+  cat /tmp/xray-preflight.log >&2 || true
+  exit 1
+fi
 systemctl restart xray
 systemctl enable xray
 systemctl is-active --quiet xray
@@ -286,11 +284,17 @@ if [[ ! -x /usr/local/bin/hysteria ]]; then
   exit 1
 fi
 
-mkdir -p /etc/hysteria /etc/hysteria/cert
+mkdir -p /etc/hysteria/cert /var/www/hy2_fake
+cat <<'HTML_FAKE' > /var/www/hy2_fake/index.html
+<html><body><h1>It works!</h1></body></html>
+HTML_FAKE
+chmod -R 755 /etc/hysteria /var/www/hy2_fake
+chmod 644 /etc/hysteria/cert/*
+
 openssl req -x509 -nodes -newkey ec:<(openssl ecparam -name prime256v1) \
   -keyout /etc/hysteria/cert/server.key \
   -out /etc/hysteria/cert/server.crt \
-  -subj "/CN=bing.com" -days 36500 2>/dev/null
+  -subj "/CN=www.bing.com" -days 36500 2>/dev/null
 
 HY2_PASS=$(openssl rand -hex 12)
 if [[ ${#HY2_PASS} -lt 16 ]]; then
@@ -299,23 +303,44 @@ if [[ ${#HY2_PASS} -lt 16 ]]; then
 fi
 
 cat << EOF > /etc/hysteria/config.yaml
-listen: :24443
+listen: 0.0.0.0:24443
+
 tls:
   cert: /etc/hysteria/cert/server.crt
   key: /etc/hysteria/cert/server.key
+
 auth:
   type: password
   password: ${HY2_PASS}
+
 masquerade:
-  type: proxy
-  proxy:
-    url: https://bing.com
-    rewriteHost: true
+  type: file
+  file:
+    dir: /var/www/hy2_fake
+
 ignoreClientBandwidth: false
 EOF
 
-chmod 600 /etc/hysteria/config.yaml /etc/hysteria/cert/server.key
-systemctl restart hysteria-server
+chmod 755 /etc/hysteria /etc/hysteria/cert /var/www/hy2_fake
+chmod 644 /etc/hysteria/config.yaml /etc/hysteria/cert/server.crt
+chmod 600 /etc/hysteria/cert/server.key
+if [[ ! -r /etc/hysteria/config.yaml ]] || [[ ! -r /etc/hysteria/cert/server.crt ]] || [[ ! -r /etc/hysteria/cert/server.key ]]; then
+  echo -e "${RED}[错误] Hysteria 证书或配置文件缺失，部署前检查失败。${PLAIN}"
+  exit 1
+fi
+if ! grep -q '^listen: 0.0.0.0:24443$' /etc/hysteria/config.yaml; then
+  echo -e "${RED}[错误] Hysteria listen 绑定不正确，必须是 0.0.0.0:24443。${PLAIN}"
+  exit 1
+fi
+if ! grep -q 'type: file' /etc/hysteria/config.yaml; then
+  echo -e "${RED}[错误] Hysteria 必须使用静态 file 伪装，不能使用外部网络反代。${PLAIN}"
+  exit 1
+fi
+systemctl restart hysteria-server || {
+  echo -e "${RED}[错误] Hysteria 重启失败，查看日志：${PLAIN}"
+  journalctl -u hysteria-server -n 60 --no-pager >&2 || true
+  exit 1
+}
 systemctl enable hysteria-server
 systemctl is-active --quiet hysteria-server
 if ! ss -lunH 'sport = :24443' | grep -q .; then
@@ -333,8 +358,8 @@ SUB_FILE="$SUB_DIR/sub-${SUB_TOKEN}.txt"
 find "$SUB_DIR" -maxdepth 1 -type f -name 'sub-*.txt' -delete
 rm -f "$SUB_DIR/sub.txt"
 
-HY2_URL="hysteria2://${HY2_PASS}@${SERVER_IP}:24443/?sni=bing.com&insecure=1#Oracle-Main-Hy2-Speed"
-REALITY_URL="vless://${UUID}@${SERVER_IP}:443?security=reality&encryption=none&pbk=${PUB_KEY}&headerType=none&fp=chrome&type=tcp&flow=xtls-rprx-vision&sni=${SNI}&sid=${SHORT_ID}#Oracle-AI-SmartRoute-Reality"
+HY2_URL="hysteria2://${HY2_PASS}@${SERVER_IP}:24443/?sni=www.bing.com&insecure=1#Oracle-Hy2-Speed"
+REALITY_URL="vless://${UUID}@${SERVER_IP}:443?security=reality&encryption=none&pbk=${PUB_KEY}&headerType=none&fp=chrome&type=tcp&flow=xtls-rprx-vision&sni=${SNI}&sid=${SHORT_ID}#Oracle-REALITY-AI"
 
 SUB_CONTENT=$(printf "%s\n%s\n" "$HY2_URL" "$REALITY_URL")
 SUB_TMP=$(mktemp "$SUB_DIR/.sub.txt.XXXXXX")
