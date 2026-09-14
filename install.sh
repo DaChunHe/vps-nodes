@@ -307,7 +307,7 @@ HY2_URL="hysteria2://${HY2_PASS}@${SERVER_IP}:24443/?insecure=1&sni=bing.com#Ora
 REALITY_URL="vless://${UUID}@${SERVER_IP}:443?security=reality&encryption=none&pbk=${PUB_KEY}&headerType=none&fp=chrome&type=tcp&flow=xtls-rprx-vision&sni=${SNI}&sid=${SHORT_ID}#Oracle-AI-SmartRoute-Reality"
 
 rm -f "$SUB_DIR/sub.txt"
-printf "%s\n%s\n" "$HY2_URL" "$REALITY_URL" > "$SUB_FILE"
+printf "%s\n%s\n" "$HY2_URL" "$REALITY_URL" | base64 -w 0 > "$SUB_FILE"
 chmod 600 "$SUB_FILE"
 
 cat << EOF > /etc/systemd/system/nodes-sub.service
