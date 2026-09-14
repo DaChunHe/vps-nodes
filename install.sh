@@ -310,8 +310,10 @@ echo -e "${GREEN}>>> 6. 更新并部署订阅服务 (端口 27695)...${PLAIN}"
 systemctl stop nodes-sub.service 2>/dev/null || true
 SUB_DIR="/var/www/nodes_sub"
 mkdir -p "$SUB_DIR"
-SUB_FILE="$SUB_DIR/sub.txt"
+SUB_TOKEN="$(date +%Y%m%d%H%M%S)-$(openssl rand -hex 4)"
+SUB_FILE="$SUB_DIR/sub-${SUB_TOKEN}.txt"
 find "$SUB_DIR" -maxdepth 1 -type f -name 'sub-*.txt' -delete
+rm -f "$SUB_DIR/sub.txt"
 
 HY2_URL="hysteria2://${HY2_PASS}@${SERVER_IP}:24443/?sni=bing.com&insecure=1#Oracle-Main-Hy2-Speed"
 REALITY_URL="vless://${UUID}@${SERVER_IP}:443?security=reality&encryption=none&pbk=${PUB_KEY}&headerType=none&fp=chrome&type=tcp&flow=xtls-rprx-vision&sni=${SNI}&sid=${SHORT_ID}#Oracle-AI-SmartRoute-Reality"
@@ -363,8 +365,8 @@ EOF
 systemctl daemon-reload
 systemctl enable --now nodes-sub.service
 systemctl is-active --quiet nodes-sub.service
-if [[ "$(curl -fsS -o /tmp/nodes-sub-check -w '%{http_code}' http://127.0.0.1:27695/sub.txt)" != "200" ]] || [[ ! -s /tmp/nodes-sub-check ]]; then
-  echo -e "${RED}[错误] 订阅服务未能返回 /sub.txt。${PLAIN}"
+if [[ "$(curl -fsS -o /tmp/nodes-sub-check -w '%{http_code}' "http://127.0.0.1:27695/sub-${SUB_TOKEN}.txt")" != "200" ]] || [[ ! -s /tmp/nodes-sub-check ]]; then
+  echo -e "${RED}[错误] 订阅服务未能返回本次生成的订阅文件。${PLAIN}"
   exit 1
 fi
 rm -f /tmp/nodes-sub-check
@@ -373,7 +375,7 @@ echo -e "\n================================================================="
 echo -e "${GREEN}恭喜！双节点与分流系统安装完成！${PLAIN}"
 echo -e "================================================================="
 echo -e "订阅地址 (直接复制到 v2rayN 订阅分组一键拉取):"
-echo -e "${YELLOW}http://${SERVER_IP}:27695/sub.txt${PLAIN}"
+echo -e "${YELLOW}http://${SERVER_IP}:27695/sub-${SUB_TOKEN}.txt${PLAIN}"
 echo -e "\n--- 节点明细 ---"
 echo -e "1. Hysteria 2:"
 echo -e "$HY2_URL"
