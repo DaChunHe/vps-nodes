@@ -73,35 +73,35 @@ apt update -y
 apt install -y curl wget socat openssl jq libcap2-bin ca-certificates gnupg python3 procps iproute2 unzip psmisc
 
 echo -e "${GREEN}>>> 3. 安装配置 WARP SOCKS5 本地出口 (127.0.0.1:40000)...${PLAIN}"
-if ! ss -tulpn | grep -q "40000"; then
-    if [[ "$ARCH" == "amd64" ]]; then
-        # x86_64 官方稳定方案
-        curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | gpg --yes --dearmor --output /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
-        CODENAME="${VERSION_CODENAME:-}"
-        if [[ -z "$CODENAME" ]]; then
-          echo -e "${RED}[错误] 无法确定系统发行版代号，不能配置 Cloudflare WARP 软件源。${PLAIN}"
-          exit 1
-        fi
-        echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ ${CODENAME} main" | tee /etc/apt/sources.list.d/cloudflare-client.list
-        apt update -y
-        apt install -y cloudflare-warp
-        systemctl enable --now warp-svc
-        sleep 2
-        if ! warp-cli --accept-tos registration show >/dev/null 2>&1; then
-          warp-cli --accept-tos registration new
-        fi
-        warp-cli --accept-tos mode proxy
-        warp-cli --accept-tos proxy port 40000
-        warp-cli --accept-tos connect
-    else
-        # ARM64 原生轻量代理部署
-        mkdir -p /opt/warp
-        curl -fL --retry 3 -o /opt/warp/warp-plus.zip https://github.com/bepass-org/warp-plus/releases/latest/download/warp-plus_linux-arm64.zip
-        unzip -p /opt/warp/warp-plus.zip warp-plus > /opt/warp/warp-go
-        rm -f /opt/warp/warp-plus.zip
-        chmod 700 /opt/warp/warp-go
-        if [[ -x /opt/warp/warp-go ]]; then
-            cat << 'EOF_WARP' > /etc/systemd/system/warp-socks.service
+configure_warp() {
+  if ss -ltnH 'sport = :40000' | grep -q .; then
+    return 0
+  fi
+
+  if [[ "$ARCH" == "amd64" ]]; then
+    # x86_64 官方稳定客户端
+    curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | gpg --yes --dearmor --output /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg || return 1
+    CODENAME="${VERSION_CODENAME:-}"
+    [[ -n "$CODENAME" ]] || return 1
+    echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ ${CODENAME} main" | tee /etc/apt/sources.list.d/cloudflare-client.list >/dev/null || return 1
+    apt update -y || return 1
+    apt install -y cloudflare-warp || return 1
+    systemctl enable --now warp-svc || return 1
+    sleep 2
+    if ! warp-cli --accept-tos registration show >/dev/null 2>&1; then
+      warp-cli --accept-tos registration new || return 1
+    fi
+    warp-cli --accept-tos mode proxy || return 1
+    warp-cli --accept-tos proxy port 40000 || return 1
+    warp-cli --accept-tos connect || return 1
+  else
+    # ARM64 原生轻量代理部署
+    mkdir -p /opt/warp || return 1
+    curl -fL --retry 3 -o /opt/warp/warp-plus.zip https://github.com/bepass-org/warp-plus/releases/latest/download/warp-plus_linux-arm64.zip || return 1
+    unzip -p /opt/warp/warp-plus.zip warp-plus > /opt/warp/warp-go || return 1
+    rm -f /opt/warp/warp-plus.zip
+    chmod 700 /opt/warp/warp-go || return 1
+    cat << 'EOF_WARP' > /etc/systemd/system/warp-socks.service
 [Unit]
 Description=WARP SOCKS5 Local Client
 After=network.target
@@ -114,22 +114,23 @@ RestartSec=3
 [Install]
 WantedBy=multi-user.target
 EOF_WARP
-            systemctl daemon-reload
-            systemctl enable --now warp-socks.service
-            systemctl is-active --quiet warp-socks.service
-        fi
-    fi
+    systemctl daemon-reload || return 1
+    systemctl enable --now warp-socks.service || return 1
+    systemctl is-active --quiet warp-socks.service || return 1
+  fi
+}
+
+if ! configure_warp; then
+  echo -e "${YELLOW}[提示] WARP 安装或启动失败，将使用直连兜底，AI 分流不会阻断节点。${PLAIN}"
 fi
 
-for _ in {1..10}; do
-  if ss -ltnH 'sport = :40000' | grep -q .; then
-    break
-  fi
-  sleep 1
-done
-if ! ss -ltnH 'sport = :40000' | grep -q .; then
-  echo -e "${RED}[错误] WARP SOCKS5 未监听 127.0.0.1:40000。${PLAIN}"
-  exit 1
+WARP_READY=0
+WARP_TRACE=$(curl -fsS --proxy socks5h://127.0.0.1:40000 --connect-timeout 4 --max-time 8 https://www.cloudflare.com/cdn-cgi/trace 2>/dev/null || true)
+if grep -q '^warp=' <<< "$WARP_TRACE"; then
+  WARP_READY=1
+  echo -e "${GREEN}[OK] WARP SOCKS5 (127.0.0.1:40000) 已成功联通！${PLAIN}"
+else
+  echo -e "${YELLOW}[提示] WARP 40000 暂未响应，REALITY 将使用直连兜底。${PLAIN}"
 fi
 
 echo -e "${GREEN}>>> 4. 安装官方 Xray-core 并部署 REALITY 节点...${PLAIN}"
@@ -164,6 +165,12 @@ if [[ -z "$PRIV_KEY" || -z "$PUB_KEY" || -z "$UUID" || -z "$SHORT_ID" ]]; then
 fi
 
 # 写入服务端完整配置（含 WARP 出站路由）
+if [[ "$WARP_READY" -eq 1 ]]; then
+  AI_OUTBOUND_TAG="warp-out"
+else
+  AI_OUTBOUND_TAG="direct"
+fi
+
 cat << EOF > /usr/local/etc/xray/config.json
 {
   "log": {
@@ -224,7 +231,7 @@ cat << EOF > /usr/local/etc/xray/config.json
     "rules": [
       {
         "type": "field",
-        "outboundTag": "warp-out",
+        "outboundTag": "${AI_OUTBOUND_TAG}",
         "domain": [
           "domain:google.com",
           "domain:googleapis.com",
