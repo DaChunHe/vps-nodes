@@ -333,6 +333,7 @@ printf '%s' "$SUB_CONTENT" | base64 -w 0 > "$SUB_TMP"
 chmod 600 "$SUB_TMP"
 mv -f "$SUB_TMP" "$SUB_FILE"
 chmod 600 "$SUB_FILE"
+ln -sfn "$(basename "$SUB_FILE")" "$SUB_DIR/sub.txt"
 if [[ "$(base64 -d "$SUB_FILE")" != "$SUB_CONTENT" ]]; then
   echo -e "${RED}[错误] 订阅文件校验失败。${PLAIN}"
   exit 1
@@ -391,7 +392,12 @@ if [[ ! -f "$SUB_FILE" || "$SUB_HTTP_STATUS" != "200" || ! -s /tmp/nodes-sub-che
   systemctl status nodes-sub.service --no-pager >&2 || true
   exit 1
 fi
+if [[ "$(curl -sS --connect-timeout 1 --max-time 3 -o /tmp/nodes-sub-legacy-check -w '%{http_code}' http://127.0.0.1:27695/sub.txt 2>/dev/null || true)" != "200" ]] || [[ ! -s /tmp/nodes-sub-legacy-check ]]; then
+  echo -e "${RED}[错误] 兼容订阅地址 /sub.txt 未能返回最新文件。${PLAIN}"
+  exit 1
+fi
 rm -f /tmp/nodes-sub-check
+rm -f /tmp/nodes-sub-legacy-check
 
 echo -e "\n================================================================="
 echo -e "${GREEN}恭喜！双节点与分流系统安装完成！${PLAIN}"
