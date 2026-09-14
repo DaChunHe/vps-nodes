@@ -311,17 +311,38 @@ systemctl stop nodes-sub.service 2>/dev/null || true
 SUB_DIR="/var/www/nodes_sub"
 mkdir -p "$SUB_DIR"
 SUB_FILE="$SUB_DIR/sub.txt"
+find "$SUB_DIR" -maxdepth 1 -type f -name 'sub-*.txt' -delete
 
 HY2_URL="hysteria2://${HY2_PASS}@${SERVER_IP}:24443/?sni=bing.com&insecure=1#Oracle-Main-Hy2-Speed"
 REALITY_URL="vless://${UUID}@${SERVER_IP}:443?security=reality&encryption=none&pbk=${PUB_KEY}&headerType=none&fp=chrome&type=tcp&flow=xtls-rprx-vision&sni=${SNI}&sid=${SHORT_ID}#Oracle-AI-SmartRoute-Reality"
 
 SUB_CONTENT=$(printf "%s\n%s\n" "$HY2_URL" "$REALITY_URL")
-printf '%s' "$SUB_CONTENT" | base64 -w 0 > "$SUB_FILE"
+SUB_TMP=$(mktemp "$SUB_DIR/.sub.txt.XXXXXX")
+printf '%s' "$SUB_CONTENT" | base64 -w 0 > "$SUB_TMP"
+chmod 600 "$SUB_TMP"
+mv -f "$SUB_TMP" "$SUB_FILE"
 chmod 600 "$SUB_FILE"
 if [[ "$(base64 -d "$SUB_FILE")" != "$SUB_CONTENT" ]]; then
   echo -e "${RED}[错误] 订阅文件校验失败。${PLAIN}"
   exit 1
 fi
+
+cat << 'EOF_SUB_SERVER' > /usr/local/sbin/nodes-sub-server.py
+#!/usr/bin/env python3
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+
+
+class SubscriptionHandler(SimpleHTTPRequestHandler):
+  def end_headers(self):
+    self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+    self.send_header("Pragma", "no-cache")
+    self.send_header("Expires", "0")
+    super().end_headers()
+
+
+ThreadingHTTPServer(("0.0.0.0", 27695), SubscriptionHandler).serve_forever()
+EOF_SUB_SERVER
+chmod 700 /usr/local/sbin/nodes-sub-server.py
 
 cat << EOF > /etc/systemd/system/nodes-sub.service
 [Unit]
@@ -331,7 +352,7 @@ After=network.target
 [Service]
 Type=simple
 WorkingDirectory=${SUB_DIR}
-ExecStart=/usr/bin/python3 -m http.server 27695 --bind 0.0.0.0
+ExecStart=/usr/bin/python3 /usr/local/sbin/nodes-sub-server.py
 Restart=always
 RestartSec=3
 
