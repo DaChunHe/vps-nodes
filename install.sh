@@ -353,10 +353,9 @@ systemctl stop nodes-sub.service 2>/dev/null || true
 fuser -k 27695/tcp 2>/dev/null || true
 SUB_DIR="/var/www/nodes_sub"
 mkdir -p "$SUB_DIR"
-SUB_TOKEN="$(date +%Y%m%d%H%M%S)-$(openssl rand -hex 4)"
-SUB_FILE="$SUB_DIR/sub-${SUB_TOKEN}.txt"
+SUB_FILE="$SUB_DIR/sub.txt"
 find "$SUB_DIR" -maxdepth 1 -type f -name 'sub-*.txt' -delete
-rm -f "$SUB_DIR/sub.txt"
+rm -f "$SUB_FILE"
 
 HY2_URL="hysteria2://${HY2_PASS}@${SERVER_IP}:24443/?sni=www.bing.com&insecure=1#Oracle-Hy2-Speed"
 REALITY_URL="vless://${UUID}@${SERVER_IP}:443?security=reality&encryption=none&pbk=${PUB_KEY}&headerType=none&fp=chrome&type=tcp&flow=xtls-rprx-vision&sni=${SNI}&sid=${SHORT_ID}#Oracle-REALITY-AI"
@@ -367,7 +366,6 @@ printf '%s' "$SUB_CONTENT" | base64 -w 0 > "$SUB_TMP"
 chmod 600 "$SUB_TMP"
 mv -f "$SUB_TMP" "$SUB_FILE"
 chmod 600 "$SUB_FILE"
-ln -sfn "$(basename "$SUB_FILE")" "$SUB_DIR/sub.txt"
 if [[ "$(base64 -d "$SUB_FILE")" != "$SUB_CONTENT" ]]; then
   echo -e "${RED}[错误] 订阅文件校验失败。${PLAIN}"
   exit 1
@@ -414,24 +412,19 @@ systemctl restart nodes-sub.service
 systemctl is-active --quiet nodes-sub.service
 SUB_HTTP_STATUS="000"
 for _ in {1..10}; do
-  SUB_HTTP_STATUS=$(curl -sS --connect-timeout 1 --max-time 3 -o /tmp/nodes-sub-check -w '%{http_code}' "http://127.0.0.1:27695/sub-${SUB_TOKEN}.txt" 2>/dev/null || true)
+  SUB_HTTP_STATUS=$(curl -sS --connect-timeout 1 --max-time 3 -o /tmp/nodes-sub-check -w '%{http_code}' "http://127.0.0.1:27695/sub.txt" 2>/dev/null || true)
   if [[ "$SUB_HTTP_STATUS" == "200" && -s /tmp/nodes-sub-check ]]; then
     break
   fi
   sleep 1
 done
 if [[ ! -f "$SUB_FILE" || "$SUB_HTTP_STATUS" != "200" || ! -s /tmp/nodes-sub-check ]]; then
-  echo -e "${RED}[错误] 订阅服务未能返回本次生成的订阅文件，当前目录内容：${PLAIN}"
+  echo -e "${RED}[错误] 订阅服务未能返回当前订阅文件，当前目录内容：${PLAIN}"
   find "$SUB_DIR" -maxdepth 1 -type f -printf '%f\n' >&2
   systemctl status nodes-sub.service --no-pager >&2 || true
   exit 1
 fi
-if [[ "$(curl -sS --connect-timeout 1 --max-time 3 -o /tmp/nodes-sub-legacy-check -w '%{http_code}' http://127.0.0.1:27695/sub.txt 2>/dev/null || true)" != "200" ]] || [[ ! -s /tmp/nodes-sub-legacy-check ]]; then
-  echo -e "${RED}[错误] 兼容订阅地址 /sub.txt 未能返回最新文件。${PLAIN}"
-  exit 1
-fi
 rm -f /tmp/nodes-sub-check
-rm -f /tmp/nodes-sub-legacy-check
 echo -e "${GREEN}端口监听状态：${PLAIN}"
 ss -lntup | grep -E ':(443|24443|27695)\b' || true
 
@@ -439,7 +432,7 @@ echo -e "\n================================================================="
 echo -e "${GREEN}恭喜！双节点与分流系统安装完成！${PLAIN}"
 echo -e "================================================================="
 echo -e "订阅地址 (直接复制到 v2rayN 订阅分组一键拉取):"
-echo -e "${YELLOW}http://${SERVER_IP}:27695/sub-${SUB_TOKEN}.txt${PLAIN}"
+echo -e "${YELLOW}http://${SERVER_IP}:27695/sub.txt${PLAIN}"
 echo -e "\n--- 节点明细 ---"
 echo -e "1. Hysteria 2:"
 echo -e "$HY2_URL"
