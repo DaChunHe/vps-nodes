@@ -308,13 +308,11 @@ echo -e "${GREEN}>>> 6. 更新并部署订阅服务 (端口 27695)...${PLAIN}"
 systemctl stop nodes-sub.service 2>/dev/null || true
 SUB_DIR="/var/www/nodes_sub"
 mkdir -p "$SUB_DIR"
-SUB_TOKEN=$(openssl rand -hex 16)
-SUB_FILE="$SUB_DIR/sub-${SUB_TOKEN}.txt"
+SUB_FILE="$SUB_DIR/sub.txt"
 
 HY2_URL="hysteria2://${HY2_PASS}@${SERVER_IP}:24443/?sni=bing.com&insecure=1#Oracle-Main-Hy2-Speed"
 REALITY_URL="vless://${UUID}@${SERVER_IP}:443?security=reality&encryption=none&pbk=${PUB_KEY}&headerType=none&fp=chrome&type=tcp&flow=xtls-rprx-vision&sni=${SNI}&sid=${SHORT_ID}#Oracle-AI-SmartRoute-Reality"
 
-rm -f "$SUB_DIR/sub.txt"
 SUB_CONTENT=$(printf "%s\n%s\n" "$HY2_URL" "$REALITY_URL")
 printf '%s' "$SUB_CONTENT" | base64 -w 0 > "$SUB_FILE"
 chmod 600 "$SUB_FILE"
@@ -342,12 +340,17 @@ EOF
 systemctl daemon-reload
 systemctl enable --now nodes-sub.service
 systemctl is-active --quiet nodes-sub.service
+if [[ "$(curl -fsS -o /tmp/nodes-sub-check -w '%{http_code}' http://127.0.0.1:27695/sub.txt)" != "200" ]] || [[ ! -s /tmp/nodes-sub-check ]]; then
+  echo -e "${RED}[错误] 订阅服务未能返回 /sub.txt。${PLAIN}"
+  exit 1
+fi
+rm -f /tmp/nodes-sub-check
 
 echo -e "\n================================================================="
 echo -e "${GREEN}恭喜！双节点与分流系统安装完成！${PLAIN}"
 echo -e "================================================================="
 echo -e "订阅地址 (直接复制到 v2rayN 订阅分组一键拉取):"
-echo -e "${YELLOW}http://${SERVER_IP}:27695/sub-${SUB_TOKEN}.txt${PLAIN}"
+echo -e "${YELLOW}http://${SERVER_IP}:27695/sub.txt${PLAIN}"
 echo -e "\n--- 节点明细 ---"
 echo -e "1. Hysteria 2:"
 echo -e "$HY2_URL"
