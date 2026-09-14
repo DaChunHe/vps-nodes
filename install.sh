@@ -70,7 +70,16 @@ fi
 echo -e "${GREEN}>>> 2. 安装必要的基础工具链...${PLAIN}"
 export DEBIAN_FRONTEND=noninteractive
 apt update -y
-apt install -y curl wget socat openssl jq libcap2-bin ca-certificates gnupg python3 procps iproute2 unzip psmisc
+apt install -y curl wget socat openssl jq libcap2-bin ca-certificates gnupg python3 procps iproute2 unzip psmisc iptables
+
+if command -v iptables >/dev/null 2>&1; then
+  iptables -C INPUT -p tcp --dport 443 -j ACCEPT 2>/dev/null || iptables -I INPUT 1 -p tcp --dport 443 -j ACCEPT
+  iptables -C INPUT -p udp --dport 24443 -j ACCEPT 2>/dev/null || iptables -I INPUT 1 -p udp --dport 24443 -j ACCEPT
+  iptables -C INPUT -p tcp --dport 27695 -j ACCEPT 2>/dev/null || iptables -I INPUT 1 -p tcp --dport 27695 -j ACCEPT
+  if command -v netfilter-persistent >/dev/null 2>&1; then
+    netfilter-persistent save 2>/dev/null || true
+  fi
+fi
 
 echo -e "${GREEN}>>> 3. 安装配置 WARP SOCKS5 本地出口 (127.0.0.1:40000)...${PLAIN}"
 configure_warp() {
@@ -398,6 +407,8 @@ if [[ "$(curl -sS --connect-timeout 1 --max-time 3 -o /tmp/nodes-sub-legacy-chec
 fi
 rm -f /tmp/nodes-sub-check
 rm -f /tmp/nodes-sub-legacy-check
+echo -e "${GREEN}端口监听状态：${PLAIN}"
+ss -lntup | grep -E ':(443|24443|27695)\b' || true
 
 echo -e "\n================================================================="
 echo -e "${GREEN}恭喜！双节点与分流系统安装完成！${PLAIN}"
