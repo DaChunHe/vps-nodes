@@ -70,7 +70,7 @@ fi
 echo -e "${GREEN}>>> 2. 安装必要的基础工具链...${PLAIN}"
 export DEBIAN_FRONTEND=noninteractive
 apt update -y
-apt install -y curl wget socat openssl jq libcap2-bin ca-certificates gnupg python3 procps iproute2 unzip
+apt install -y curl wget socat openssl jq libcap2-bin ca-certificates gnupg python3 procps iproute2 unzip psmisc
 
 echo -e "${GREEN}>>> 3. 安装配置 WARP SOCKS5 本地出口 (127.0.0.1:40000)...${PLAIN}"
 if ! ss -tulpn | grep -q "40000"; then
@@ -116,6 +116,7 @@ WantedBy=multi-user.target
 EOF_WARP
             systemctl daemon-reload
             systemctl enable --now warp-socks.service
+            systemctl is-active --quiet warp-socks.service
         fi
     fi
 fi
@@ -308,6 +309,7 @@ fi
 
 echo -e "${GREEN}>>> 6. 更新并部署订阅服务 (端口 27695)...${PLAIN}"
 systemctl stop nodes-sub.service 2>/dev/null || true
+fuser -k 27695/tcp 2>/dev/null || true
 SUB_DIR="/var/www/nodes_sub"
 mkdir -p "$SUB_DIR"
 SUB_TOKEN="$(date +%Y%m%d%H%M%S)-$(openssl rand -hex 4)"
