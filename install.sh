@@ -143,14 +143,20 @@ if [[ ! -x /usr/local/bin/xray ]]; then
 fi
 
 # 直接调用刚安装的 xray 原生二进制，彻底杜绝手工计算密钥错误
-KEY_PAIR=$(/usr/local/bin/xray x25519)
-PRIV_KEY=$(echo "$KEY_PAIR" | grep -Ei 'Private key|Password' | awk '{print $NF}')
-PUB_KEY=$(echo "$KEY_PAIR" | grep -Ei 'Public key' | awk '{print $NF}')
-UUID=$(/usr/local/bin/xray uuid)
+if ! KEY_PAIR=$(/usr/local/bin/xray x25519 2>&1); then
+  echo -e "${RED}[错误] Xray x25519 密钥生成失败：${KEY_PAIR}${PLAIN}"
+  exit 1
+fi
+PRIV_KEY=$(printf '%s\n' "$KEY_PAIR" | awk 'tolower($0) ~ /private[[:space:]_-]*key|password/ { print $NF; exit }')
+PUB_KEY=$(printf '%s\n' "$KEY_PAIR" | awk 'tolower($0) ~ /public[[:space:]_-]*key/ { print $NF; exit }')
+if ! UUID=$(/usr/local/bin/xray uuid 2>&1); then
+  echo -e "${RED}[错误] Xray UUID 生成失败：${UUID}${PLAIN}"
+  exit 1
+fi
 SHORT_ID=$(openssl rand -hex 4)
 SNI="www.microsoft.com"
 if [[ -z "$PRIV_KEY" || -z "$PUB_KEY" || -z "$UUID" || -z "$SHORT_ID" ]]; then
-  echo -e "${RED}[错误] Xray 密钥或 UUID 生成失败。${PLAIN}"
+  echo -e "${RED}[错误] 无法解析 Xray 密钥输出，请检查当前 Xray-core 版本的 x25519 输出格式。${PLAIN}"
   exit 1
 fi
 
